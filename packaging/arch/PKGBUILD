@@ -1,0 +1,29 @@
+# Maintainer: Caand <your-email@example.com>
+pkgname=gostfetch
+pkgver=0.2.0
+pkgrel=1
+pkgdesc='Distro logo on the left, live CPU/RAM/GPU/network monitor on the right (fastfetch + btop style)'
+arch=('any')
+url='https://github.com/caraand/gostfetch'
+license=('MIT')
+depends=(
+  'python'        # 3.11+ (tomllib); curses is in the standard library
+  'fastfetch'     # real distro logos
+  'pciutils'      # lspci: GPU name
+)
+# nvidia-smi comes from nvidia-utils, which any NVIDIA driver already pulls in,
+# so it is intentionally not listed (AMD uses sysfs, no extra package needed).
+makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')  # replace with `updpkgsums` once the GitHub tag exists
+
+build() {
+  cd "$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
