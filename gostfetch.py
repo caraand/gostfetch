@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
-"""gostfetch - CLI: слева лого дистра (авто-определение), справа живой мониторинг.
+"""gostfetch - CLI: слева лого дистра (из fastfetch), справа живой мониторинг.
 
-Только stdlib (Python 3.11+ для чтения TOML-конфига).
+Только stdlib (Python 3.11+ для чтения TOML-конфига). Для лого нужен fastfetch.
 
 Запуск:   gostfetch            (или python3 gostfetch.py)
-Опции:    --logo auto|debian|fedora|arch|none|/путь/к/файлу.txt
+Опции:    --logo auto|none|ИМЯ|/путь/к/файлу.txt   (ИМЯ - любое лого fastfetch)
+          --list-logos       вывести все доступные лого и выйти
           --refresh СЕК      скорость обновления (0.2 .. 10)
+          --lang auto|ru|en  язык интерфейса
           --config ФАЙЛ      свой конфиг
           --distro ИМЯ       принудительно определить дистр
-Клавиши:  q/Esc выход, +/- скорость, l сменить лого, s сохранить в конфиг
+Клавиши:  q/Esc выход, +/- скорость, l/L следующее/предыдущее лого,
+          g язык (ru/en), s сохранить в конфиг
 
 Конфиг: $XDG_CONFIG_HOME/gostfetch/config.toml  (~/.config/gostfetch/config.toml)
     refresh = 1.0
     logo = "auto"
+    lang = "auto"
 
 Лого ищутся так (по порядку):
   1) путь, если в конфиге указан файл
-  2) ~/.config/gostfetch/logos/<имя>.txt
-  3) /usr/share/gostfetch/logos/<имя>.txt   (сюда положит AUR-пакет)
-  4) fastfetch / neofetch, если установлены
-  5) простая заглушка с названием дистра
+  2) ~/.config/gostfetch/logos/<имя>.txt   (свои лого важнее)
+  3) /usr/share/gostfetch/logos/<имя>.txt
+  4) fastfetch: все встроенные лого; для auto он сам выбирает лого твоего дистра
+  5) neofetch, если fastfetch нет
+  6) простая заглушка с названием дистра
 """
 import argparse
 import curses
@@ -45,21 +50,123 @@ APP = "gostfetch"
 HIST = 60
 SPARK = "▁▂▃▄▅▆▇█"
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+SGR = re.compile(r"\x1b\[([0-9;]*)m")
 
-# имя дистра -> (цвет, имя для fastfetch/neofetch)
+# запасной цвет акцента, если достать цвет из самого лого не вышло
 DISTROS = {
-    "debian": (curses.COLOR_RED, "debian"),
-    "fedora": (curses.COLOR_BLUE, "fedora"),
-    "arch": (curses.COLOR_CYAN, "arch"),
+    "debian": curses.COLOR_RED,
+    "fedora": curses.COLOR_BLUE,
+    "arch": curses.COLOR_CYAN,
 }
 DEFAULT_COLOR = curses.COLOR_GREEN
 
-LOGO_CHOICES = ["auto", "debian", "fedora", "arch", "none"]
+LANGS = ("ru", "en")
 REFRESH_STEPS = [0.25, 0.5, 1.0, 2.0, 5.0]
 REFRESH_MIN, REFRESH_MAX = 0.2, 10.0
-DEFAULTS = {"refresh": 1.0, "logo": "auto"}
+DEFAULTS = {"refresh": 1.0, "logo": "auto", "lang": "auto"}
 
 SYSTEM_LOGO_DIRS = ["/usr/share/gostfetch/logos", "/usr/local/share/gostfetch/logos"]
+
+
+# ───────────────────────── язык (ru / en) ─────────────────────────
+STRINGS = {
+    "ru": {
+        "small_term": "Окно маловато, растяни терминал (min 50x18)",
+        "no_gpu": "нет данных по загрузке (нужен nvidia-smi или amdgpu)",
+        "help": "q выход  +/- скорость  l/L лого  g язык  s сохранить",
+        "st_refresh": "обновление",
+        "st_logo": "лого",
+        "st_lang": "язык",
+        "saved": "сохранено: {path}",
+        "save_fail": "не удалось сохранить конфиг",
+        "need_py311": "нужен Python 3.11+ для чтения конфига, использую дефолты",
+        "cfg_bad": "конфиг {path} не прочитан ({err}), использую дефолты",
+        "no_fastfetch": "fastfetch не найден, поставь его: из него берутся все лого",
+        "hint1": "(поставь fastfetch —",
+        "hint2": "будет настоящее лого)",
+        "lbl_os": "ОС",
+        "lbl_kernel": "Ядро",
+        "lbl_host": "Хост",
+        "lbl_uptime": "Аптайм",
+        "cores": "ядра",
+        "u_d": "д",
+        "u_h": "ч",
+        "u_m": "м",
+        "sec": "с",
+        "cfg_header": "конфиг gostfetch",
+        "cfg_refresh": "refresh: секунды между обновлениями (0.2 .. 10)",
+        "cfg_logo": "logo: auto | none | имя лого fastfetch (gostfetch --list-logos) | /путь/к/лого.txt",
+        "cfg_lang": "lang: auto | ru | en",
+        "a_desc": "лого дистра + живой мониторинг системы",
+        "a_logo": "auto | none | имя лого fastfetch | путь к .txt (список: --list-logos)",
+        "a_list": "вывести все доступные лого fastfetch и выйти",
+        "a_refresh": "интервал обновления, сек ({lo}..{hi})",
+        "a_lang": "язык интерфейса",
+        "a_config": "путь к конфигу (по умолчанию XDG)",
+        "a_distro": "принудительно задать дистр (для авто-лого)",
+    },
+    "en": {
+        "small_term": "Terminal too small, resize it (min 50x18)",
+        "no_gpu": "no load data (needs nvidia-smi or amdgpu)",
+        "help": "q quit  +/- speed  l/L logo  g language  s save",
+        "st_refresh": "refresh",
+        "st_logo": "logo",
+        "st_lang": "lang",
+        "saved": "saved: {path}",
+        "save_fail": "could not save config",
+        "need_py311": "Python 3.11+ is required to read the config, using defaults",
+        "cfg_bad": "config {path} could not be read ({err}), using defaults",
+        "no_fastfetch": "fastfetch not found, install it: all logos come from it",
+        "hint1": "(install fastfetch",
+        "hint2": "for the real logo)",
+        "lbl_os": "OS",
+        "lbl_kernel": "Kernel",
+        "lbl_host": "Host",
+        "lbl_uptime": "Uptime",
+        "cores": "cores",
+        "u_d": "d",
+        "u_h": "h",
+        "u_m": "m",
+        "sec": "s",
+        "cfg_header": "gostfetch config",
+        "cfg_refresh": "refresh: seconds between updates (0.2 .. 10)",
+        "cfg_logo": "logo: auto | none | fastfetch logo name (gostfetch --list-logos) | /path/to/logo.txt",
+        "cfg_lang": "lang: auto | ru | en",
+        "a_desc": "distro logo + live system monitor",
+        "a_logo": "auto | none | fastfetch logo name | path to .txt (list them: --list-logos)",
+        "a_list": "print all available fastfetch logos and exit",
+        "a_refresh": "refresh interval, seconds ({lo}..{hi})",
+        "a_lang": "interface language",
+        "a_config": "config path (XDG by default)",
+        "a_distro": "force the distro (affects the auto logo)",
+    },
+}
+_lang = "en"
+
+
+def set_lang(code):
+    global _lang
+    _lang = code if code in LANGS else "en"
+
+
+def t(key, **kw):
+    s = STRINGS[_lang].get(key) or STRINGS["en"][key]
+    return s.format(**kw) if kw else s
+
+
+def detect_lang():
+    """Язык системы по переменным окружения: ru* -> ru, всё остальное -> en."""
+    for var in ("LC_ALL", "LC_MESSAGES", "LANGUAGE", "LANG"):
+        v = os.environ.get(var, "")
+        if v:
+            return "ru" if v.lower().startswith("ru") else "en"
+    return "en"
+
+
+def resolve_lang(value):
+    """auto | ru | en (и любой мусор) -> 'ru' или 'en'."""
+    v = (value or "auto").strip().lower()
+    return v if v in LANGS else detect_lang()
 
 
 # ───────────────────────── конфиг ─────────────────────────
@@ -85,16 +192,19 @@ def load_config(path):
     if not os.path.exists(path):
         return cfg, None
     if tomllib is None:
-        return cfg, "нужен Python 3.11+ для чтения конфига, использую дефолты"
+        return cfg, t("need_py311")
     try:
         with open(path, "rb") as f:
             data = tomllib.load(f)
     except (OSError, tomllib.TOMLDecodeError) as e:
-        return cfg, f"конфиг {path} не прочитан ({e}), использую дефолты"
+        return cfg, t("cfg_bad", path=path, err=e)
     if "refresh" in data:
         cfg["refresh"] = clamp_refresh(data["refresh"])
     if isinstance(data.get("logo"), str) and data["logo"].strip():
         cfg["logo"] = data["logo"].strip()
+    lang = data.get("lang")
+    if isinstance(lang, str) and lang.strip().lower() in ("auto", *LANGS):
+        cfg["lang"] = lang.strip().lower()
     return cfg, None
 
 
@@ -102,11 +212,13 @@ def save_config(path, cfg):
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            f.write("# gostfetch config\n")
-            f.write("# refresh: секунды между обновлениями (0.2 .. 10)\n")
+            f.write(f"# {t('cfg_header')}\n")
+            f.write(f"# {t('cfg_refresh')}\n")
             f.write(f"refresh = {cfg['refresh']:g}\n")
-            f.write("# logo: auto | debian | fedora | arch | none | /путь/к/лого.txt\n")
+            f.write(f"# {t('cfg_logo')}\n")
             f.write(f"logo = {json.dumps(cfg['logo'], ensure_ascii=False)}\n")
+            f.write(f"# {t('cfg_lang')}\n")
+            f.write(f"lang = {json.dumps(cfg['lang'])}\n")
         return True
     except OSError:
         return False
@@ -149,7 +261,10 @@ def detect_distro(override=None):
 # ───────────────────────── лого ─────────────────────────
 def run(cmd, timeout=2):
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # stdin закрыт, чтобы дочерний процесс не лез в терминал и не съедал клавиши curses;
+        # encoding задан явно, чтобы юникод-лого не падали в C-локали
+        r = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                           timeout=timeout, stdin=subprocess.DEVNULL)
         return r.stdout if r.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -179,33 +294,97 @@ def is_path(spec):
     return "/" in spec or spec.startswith("~") or spec.endswith(".txt")
 
 
-def load_logo(spec, detected):
-    """spec: auto | имя дистра | none | путь к файлу. -> (lines, accent_name)"""
+def sgr_colors(raw):
+    """Цвета переднего плана (номера xterm 0..255) из ANSI-вывода, по порядку появления."""
+    for m in SGR.finditer(raw):
+        p = [int(x) for x in m.group(1).split(";") if x.isdigit()]
+        i = 0
+        while i < len(p):
+            c = p[i]
+            if 30 <= c <= 37:
+                yield c - 30
+            elif 90 <= c <= 97:
+                yield c - 90 + 8
+            elif c == 38 and p[i + 1:i + 2] == [5] and i + 2 < len(p):
+                yield p[i + 2]
+                i += 2
+            elif c == 38 and p[i + 1:i + 2] == [2] and i + 4 < len(p):
+                r, g, b = p[i + 2:i + 5]
+                yield 16 + 36 * round(r / 255 * 5) + 6 * round(g / 255 * 5) + round(b / 255 * 5)
+                i += 4
+            i += 1
+
+
+def pick_accent(raw):
+    """Первый заметный цвет лого (чёрный пропускаем: на тёмном фоне не видно) или None."""
+    for c in sgr_colors(raw):
+        if c not in (0, 16):
+            return c
+    return None
+
+
+def parse_logo_list(text):
+    """Имена лого из вывода fastfetch: по одному в строке, либо `12) "Имя" "Алиас"`."""
+    names = {}
+    for line in text.splitlines():
+        quoted = re.findall(r'"([^"]+)"', line)
+        name = quoted[0] if quoted else line.strip()
+        if name and not name.endswith(":"):
+            names[name] = None
+    return list(names)
+
+
+_LOGOS = None
+
+
+def fastfetch_logos():
+    """Все встроенные лого fastfetch (кэшируется). Пусто, если fastfetch не установлен."""
+    global _LOGOS
+    if _LOGOS is None:
+        _LOGOS = []
+        if shutil.which("fastfetch"):
+            for cmd in (["fastfetch", "--list-logos", "autocompletion"],
+                        ["fastfetch", "--list-logos"]):
+                _LOGOS = parse_logo_list(run(cmd, timeout=4))
+                if _LOGOS:
+                    break
+    return _LOGOS
+
+
+def load_logo(spec, detected, forced=False):
+    """spec: auto | имя лого fastfetch | none | путь к файлу.
+    -> (lines, accent): accent - номер цвета xterm (0..255) или None."""
     if spec == "none":
-        return [], detected
+        return [], None
     if is_path(spec):
         lines = read_logo_file(os.path.expanduser(spec))
-        return (lines or fallback_logo(detected)), detected
-    name = detected if spec == "auto" else spec.lower()
+        return (lines or fallback_logo(detected)), DISTROS.get(detected)
+    auto = spec == "auto"
+    name = detected if auto else spec
+    key = name.lower()
     dirs = [os.path.join(config_dir(), "logos")] + SYSTEM_LOGO_DIRS
     for d in dirs:
-        lines = read_logo_file(os.path.join(d, f"{name}.txt"))
+        lines = read_logo_file(os.path.join(d, f"{key}.txt"))
         if lines:
-            return lines, name
-    ff_name = DISTROS.get(name, (0, name))[1]
+            return lines, DISTROS.get(key)
     attempts = []
     if shutil.which("fastfetch"):
+        # auto: fastfetch сам выберет лого твоего дистра (EndeavourOS, Mint, ...);
+        # имя передаём, только если его задали явно (--logo ИМЯ, --distro ИМЯ или клавиша l)
+        sel = [] if auto and not forced else ["--logo", name]
         attempts += [
-            ["fastfetch", "--logo", ff_name, "--structure", "Break", "--pipe", "true"],
-            ["fastfetch", "-l", ff_name, "-s", "none", "--pipe", "true"],
+            ["fastfetch", *sel, "--structure", "Break", "--pipe", "false"],
+            ["fastfetch", *sel, "-s", "none", "--pipe", "false"],
         ]
     if shutil.which("neofetch"):
-        attempts += [["neofetch", "--ascii_distro", ff_name, "-L"]]
+        attempts += [["neofetch", "--ascii_distro", key, "-L"]]
     for cmd in attempts:
-        lines = clean_logo(run(cmd, timeout=4))
+        raw = run(cmd, timeout=4)
+        lines = clean_logo(raw)
         if len(lines) >= 4:
-            return lines, name
-    return fallback_logo(name), name
+            color = pick_accent(raw)
+            return lines, (color if color is not None else DISTROS.get(key))
+    return fallback_logo(name), DISTROS.get(key)
 
 
 def fallback_logo(distro):
@@ -215,7 +394,7 @@ def fallback_logo(distro):
     bot = "╰" + "─" * (w - 2) + "╯"
     empty = "│" + " " * (w - 2) + "│"
     mid = "│" + title.center(w - 2) + "│"
-    return [top, empty, empty, mid, empty, empty, bot, "", "(поставь fastfetch —".center(w), "будет настоящее лого)".center(w)]
+    return [top, empty, empty, mid, empty, empty, bot, "", t("hint1").center(w), t("hint2").center(w)]
 
 
 # ───────────────────────── сбор статистики ─────────────────────────
@@ -388,14 +567,15 @@ def uptime():
     d, s = divmod(s, 86400)
     h, s = divmod(s, 3600)
     m = s // 60
-    return (f"{d}д " if d else "") + f"{h}ч {m}м"
+    return (f"{d}{t('u_d')} " if d else "") + f"{h}{t('u_h')} {m}{t('u_m')}"
 
 
 # ───────────────────────── отрисовка ─────────────────────────
 class UI:
-    def __init__(self, scr, detected, pretty, spec):
+    def __init__(self, scr, detected, pretty, spec, forced=False):
         self.scr = scr
         self.detected = detected
+        self.forced = forced  # дистр задан вручную (--distro): auto-лого берём по нему
         self.pretty = pretty
         self.cache = {}
         try:
@@ -413,10 +593,13 @@ class UI:
     def set_logo(self, spec):
         self.spec = spec
         if spec not in self.cache:
-            self.cache[spec] = load_logo(spec, self.detected)
-        self.logo, name = self.cache[spec]
-        accent = DISTROS.get(name, (DEFAULT_COLOR,))[0]
-        curses.init_pair(1, accent, -1)           # акцент дистра
+            self.cache[spec] = load_logo(spec, self.detected, self.forced)
+        self.logo, accent = self.cache[spec]
+        if accent is None:
+            accent = DEFAULT_COLOR
+        if accent >= curses.COLORS:               # терминал победнее (8/16 цветов)
+            accent %= 8
+        curses.init_pair(1, accent, -1)           # акцент лого
         self.ACC = curses.color_pair(1)
 
     def put(self, y, x, s, attr=0):
@@ -449,7 +632,7 @@ class UI:
         self.scr.erase()
         h, w = self.scr.getmaxyx()
         if h < 18 or w < 50:
-            self.put(0, 0, "Окно маловато, растяни терминал (min 50x18)")
+            self.put(0, 0, t("small_term"))
             self.scr.refresh()
             return
 
@@ -465,8 +648,8 @@ class UI:
                 self.put(y, 1, line, self.ACC | curses.A_BOLD)
                 y += 1
             y += 1
-            info = [("OS", self.pretty), ("Kernel", os.uname().release),
-                    ("Host", os.uname().nodename), ("Uptime", uptime())]
+            info = [(t("lbl_os"), self.pretty), (t("lbl_kernel"), os.uname().release),
+                    (t("lbl_host"), os.uname().nodename), (t("lbl_uptime"), uptime())]
             for k, v in info:
                 if y >= h - 1:
                     break
@@ -486,7 +669,7 @@ class UI:
         t = f"  {st.temp:.0f}°C" if st.temp is not None else ""
         self.bar(y, x0, bw, st.cpu_total, f"{st.cpu_total:5.1f}%{t}")
         y += 1
-        self.put(y, x0, "cores ", self.DIM)
+        self.put(y, x0, t("cores").ljust(6), self.DIM)
         for i, c in enumerate(st.cores[: max(0, pw - 8)]):
             ch = SPARK[min(int(c / 100 * 7 + 0.5), 7)]
             self.put(y, x0 + 6 + i, ch, self.level(c))
@@ -520,7 +703,7 @@ class UI:
             self.put(y, x0, spark(st.gpu_hist, sw, 100), self.ACC)
             y += 1
         else:
-            self.put(y, x0, "нет данных по загрузке (нужен nvidia-smi или amdgpu)", self.DIM)
+            self.put(y, x0, t("no_gpu"), self.DIM)
             y += 1
         y += 1
 
@@ -540,11 +723,8 @@ class UI:
         self.scr.refresh()
 
 
-HELP = "q выход  +/- скорость  l лого  s сохранить"
-
-
 def fmt_refresh(r):
-    return f"{r:g}с"
+    return f"{r:g}{t('sec')}"
 
 
 def step_refresh(cur, direction):
@@ -555,14 +735,17 @@ def step_refresh(cur, direction):
     return steps[i]
 
 
-def next_logo(spec):
-    if spec in LOGO_CHOICES:
-        return LOGO_CHOICES[(LOGO_CHOICES.index(spec) + 1) % len(LOGO_CHOICES)]
-    return LOGO_CHOICES[0]  # кастомный путь -> возвращаемся к auto
+def next_logo(spec, step=1):
+    """Листает по кругу: auto -> none -> все лого fastfetch -> auto. step=-1 - назад."""
+    choices = ["auto", "none"] + fastfetch_logos()
+    low = [c.lower() for c in choices]
+    if spec.lower() not in low:
+        return choices[0]  # кастомный путь -> возвращаемся к auto
+    return choices[(low.index(spec.lower()) + step) % len(choices)]
 
 
-def run_ui(scr, detected, pretty, cfg, cfg_path):
-    ui = UI(scr, detected, pretty, cfg["logo"])
+def run_ui(scr, detected, pretty, cfg, cfg_path, forced=False):
+    ui = UI(scr, detected, pretty, cfg["logo"], forced)
     st = Stats()
     flash, flash_until = "", 0.0
     time.sleep(0.3)
@@ -572,7 +755,8 @@ def run_ui(scr, detected, pretty, cfg, cfg_path):
         if now >= next_t:
             st.update()
             next_t = now + cfg["refresh"]
-        status = f"{HELP}  |  обновление: {fmt_refresh(cfg['refresh'])}  лого: {cfg['logo']}"
+        status = (f"{t('help')}  |  {t('st_refresh')}: {fmt_refresh(cfg['refresh'])}"
+                  f"  {t('st_logo')}: {cfg['logo']}  {t('st_lang')}: {resolve_lang(cfg['lang'])}")
         if now < flash_until:
             status = flash
         ui.draw(st, status)
@@ -587,20 +771,32 @@ def run_ui(scr, detected, pretty, cfg, cfg_path):
             cfg["refresh"] = step_refresh(cfg["refresh"], -1)
             next_t = time.time() + cfg["refresh"]
         elif k in (ord("l"), ord("L")):
-            cfg["logo"] = next_logo(cfg["logo"])
+            cfg["logo"] = next_logo(cfg["logo"], 1 if k == ord("l") else -1)
+            ui.set_logo(cfg["logo"])
+        elif k in (ord("g"), ord("G")):
+            cfg["lang"] = "en" if resolve_lang(cfg["lang"]) == "ru" else "ru"
+            set_lang(cfg["lang"])
+            ui.cache.clear()  # заглушка лого содержит текст на текущем языке
             ui.set_logo(cfg["logo"])
         elif k in (ord("s"), ord("S")):
             ok = save_config(cfg_path, cfg)
-            flash = f"сохранено: {cfg_path}" if ok else "не удалось сохранить конфиг"
+            flash = t("saved", path=cfg_path) if ok else t("save_fail")
             flash_until = time.time() + 3
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(prog=APP, description="лого дистра + живой мониторинг системы")
-    p.add_argument("--logo", help="auto | debian | fedora | arch | none | путь к .txt")
-    p.add_argument("--refresh", type=float, help=f"интервал обновления, сек ({REFRESH_MIN}..{REFRESH_MAX})")
-    p.add_argument("--config", help="путь к конфигу (по умолчанию XDG)")
-    p.add_argument("--distro", help="принудительно задать дистр (для авто-лого)")
+    # сначала вытаскиваем --lang, чтобы --help уже был на нужном языке
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--lang")
+    known, _ = pre.parse_known_args(argv)
+    set_lang(resolve_lang(known.lang))
+    p = argparse.ArgumentParser(prog=APP, description=t("a_desc"))
+    p.add_argument("--logo", help=t("a_logo"))
+    p.add_argument("--list-logos", action="store_true", help=t("a_list"))
+    p.add_argument("--refresh", type=float, help=t("a_refresh", lo=REFRESH_MIN, hi=REFRESH_MAX))
+    p.add_argument("--lang", choices=["auto", *LANGS], help=t("a_lang"))
+    p.add_argument("--config", help=t("a_config"))
+    p.add_argument("--distro", help=t("a_distro"))
     p.add_argument("--version", action="version", version=f"{APP} {__version__}")
     return p.parse_args(argv)
 
@@ -608,6 +804,13 @@ def parse_args(argv=None):
 def cli(argv=None):
     """Точка входа (для AUR / console_scripts: gostfetch = gostfetch:cli)."""
     args = parse_args(argv)
+    if args.list_logos:
+        names = fastfetch_logos()
+        if not names:
+            print(f"{APP}: {t('no_fastfetch')}", file=sys.stderr)
+            return 1
+        print("\n".join(names))
+        return 0
     cfg_path = os.path.expanduser(args.config) if args.config else default_config_path()
     cfg, warn = load_config(cfg_path)
     if warn:
@@ -617,12 +820,15 @@ def cli(argv=None):
         cfg["logo"] = args.logo
     if args.refresh is not None:
         cfg["refresh"] = clamp_refresh(args.refresh)
+    if args.lang:
+        cfg["lang"] = args.lang
+    set_lang(resolve_lang(cfg["lang"]))
     detected, pretty = detect_distro(args.distro)
     try:
-        curses.wrapper(run_ui, detected, pretty, cfg, cfg_path)
+        curses.wrapper(run_ui, detected, pretty, cfg, cfg_path, bool(args.distro))
     except KeyboardInterrupt:
         pass
 
 
 if __name__ == "__main__":
-    cli()
+    sys.exit(cli())
