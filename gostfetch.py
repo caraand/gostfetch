@@ -666,8 +666,8 @@ class UI:
         # CPU
         self.header(y, x0, pw, "CPU", st.cname)
         y += 1
-        t = f"  {st.temp:.0f}°C" if st.temp is not None else ""
-        self.bar(y, x0, bw, st.cpu_total, f"{st.cpu_total:5.1f}%{t}")
+        cpu_t = f"  {st.temp:.0f}°C" if st.temp is not None else ""
+        self.bar(y, x0, bw, st.cpu_total, f"{st.cpu_total:5.1f}%{cpu_t}")
         y += 1
         self.put(y, x0, t("cores").ljust(6), self.DIM)
         for i, c in enumerate(st.cores[: max(0, pw - 8)]):
