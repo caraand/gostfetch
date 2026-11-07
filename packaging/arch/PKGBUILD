@@ -1,6 +1,6 @@
 # Maintainer: caraand <caracal058@gmail.com>
 pkgname=gostfetch
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='Distro logo on the left, live CPU/RAM/GPU/network monitor on the right (fastfetch + btop style)'
 arch=('any')

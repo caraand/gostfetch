@@ -55,9 +55,32 @@ which ships with the NVIDIA driver (`nvidia-utils`) you already have if you run 
 
 ## Install
 
-Arch (AUR): `yay -S gostfetch` (once published). The package pulls in `fastfetch`.
+Arch Linux, prebuilt package from the latest release (v0.3.0):
+
+```
+sudo pacman -U https://github.com/caraand/gostfetch/releases/download/v0.3.0/gostfetch-0.3.0-1-any.pkg.tar.zst
+```
+
+pacman pulls in the dependencies (`python`, `fastfetch`, `pciutils`) by itself.
+An AUR package (`yay -S gostfetch`) will come later.
 
 From source: `pip install .` and install `fastfetch` with your package manager.
+
+## What's new in 0.3.0
+
+- **All fastfetch logos.** Logos are taken straight from fastfetch: 500+ built-in
+  ones instead of the previous three (Debian, Fedora, Arch). `auto` lets fastfetch
+  pick the real logo of your distro (EndeavourOS, Mint, ...) instead of the nearest
+  of three. New: `--logo NAME`, `--list-logos`, `l` / `L` to browse them, and the
+  accent color is now read from the logo itself.
+- **English and Russian interface.** `--lang auto|ru|en`, `lang` in the config,
+  `g` to switch on the fly; `auto` follows `LANG`. Everything is translated:
+  panels, status line, errors, `--help`.
+- **fastfetch is now a required dependency** (the Arch package depends on it).
+- **Sturdier logo loading.** Helper processes no longer touch the terminal input,
+  and non-ASCII logos work in the C locale.
+
+Existing configs keep working; `lang` is simply added the next time you press `s`.
 
 ## License
 

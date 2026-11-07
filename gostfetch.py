@@ -44,7 +44,7 @@ try:
 except ImportError:  # Python < 3.11
     tomllib = None
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 APP = "gostfetch"
 
 HIST = 60
